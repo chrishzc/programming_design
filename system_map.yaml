@@ -1,12 +1,43 @@
 version: 1
 modules:
-  calculate_tax:
-    type: function
-    state: validated
+  read_context:
+    type: tool
+    state: deployed
     dependencies: []
     input:
-      amount: float
-      country: string
+      node_name: string
     output:
-      tax: float
-    description: 計算各國稅金的最簡原子函數
+      context: object
+    description: 讀取單一節點最小上下文的輔助工具
+
+  check_normalization:
+    type: tool
+    state: deployed
+    dependencies: []
+    input:
+      proposed_function: string
+    output:
+      result: object
+    description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
+
+  analyze_cascade:
+    type: tool
+    state: deployed
+    dependencies: []
+    input:
+      changed_node_name: string
+    output:
+      dirty_nodes: array
+    description: 執行髒點級聯依賴分析的 DAG 走查工具
+
+  transit_state:
+    type: tool
+    state: deployed
+    dependencies: []
+    input:
+      node_name: string
+      next_state: string
+    output:
+      result: object
+    description: 推進或變更模組生命週期狀態的狀態機工具
+

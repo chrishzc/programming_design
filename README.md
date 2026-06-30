@@ -39,7 +39,11 @@ programming_design/
 ```bash
 python install.py init
 ```
-這將會在專案中建立 `checkpoints/` 資料夾以及 `system_map.yaml` 架構總表範本。
+這將會自動完成以下專業環境配置：
+* 建立 `checkpoints/` 資料夾以及雙軌（環境與模組）結構的 `system_map.yaml` 範本。
+* 初始化 Git 倉庫並建立帶有排除規則的 `.gitignore`。
+* 建立 Python 虛擬環境 (`venv`) 並產生 `requirements.txt`。
+* 建立容器開發環境範本（`Dockerfile`、`docker-compose.yml`、`.dockerignore`）。
 
 ### 2. 全域安裝 (跨專案通用)
 將本規範與 Skills 安裝至您目前電腦中 Antigravity 的全域設定目錄：
@@ -66,6 +70,16 @@ python install.py pack
 | `check_normalization.py` | 執行 Rule of Two 檢查 | Phase 1 架構規劃期，檢測是否重複造輪子 |
 | `analyze_cascade.py` | 執行髒點依賴分析 (DAG 走查) | Phase 3 反向同步，架構變更時級聯標記 `dirty` |
 | `transit_state.py` | 推進/變更模組生命週期狀態 | CP 審查通過、Lint 通過或被退回時更新狀態 |
+
+---
+
+## 🔄 ADAD 人機協作工作流 (Human-Agent Workflow)
+本開發模式共分為五個核心階段，藉由 Checkpoint 由人類把關架構：
+* **Phase 1: 架構規劃** (規劃模組功能 -> **CP-1** 審查)
+* **Phase 1.5: 環境與容器規劃** (規劃 Docker Compose 容器編排 -> **CP-1.5** 審查)
+* **Phase 2: 原子生成** (逐一節點生成代碼與 Lint -> **CP-2** 審查)
+* **Phase 3: 反向同步** (實作期發現規格異動 -> **CP-3** 審查與髒點級聯標記)
+* **Phase 4: 執行回饋** (運行期效能分析與重構建議 -> **CP-4** 審查)
 
 ---
 

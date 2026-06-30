@@ -8,14 +8,15 @@ import sys
 import shutil
 import zipfile
 
-GLOBAL_CONFIG_DIR = r"C:\Users\chris\.gemini\config"
+GLOBAL_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "config")
 AGENT_RULES_BLOCK_START = "\n# === ADAD GLOBAL RULES START ===\n"
 AGENT_RULES_BLOCK_END = "\n# === ADAD GLOBAL RULES END ===\n"
 
 def init_project():
     """在當前目錄初始化 ADAD 模式"""
     print("[ADAD] 正在初始化當前專案...")
-    
+    import subprocess
+
     # 1. 建立 checkpoints 目錄
     if not os.path.exists("checkpoints"):
         os.makedirs("checkpoints")
@@ -26,6 +27,25 @@ def init_project():
     # 2. 建立 system_map.yaml 初始範本
     if not os.path.exists("system_map.yaml"):
         default_map = """version: 1
+environment:
+  compose_arch: true
+  state: "planned"
+  services:
+    backend:
+      type: "container"
+      build: "./backend"
+      ports:
+        - "8000:8000"
+      environment:
+        - "ENV=development"
+      depends_on:
+        - "db"
+    db:
+      type: "container"
+      image: "postgres:15-alpine"
+      volumes:
+        - "db_data:/var/lib/postgresql/data"
+
 modules:
   # 範例節點：請使用 transit_state 推進其生命週期，或使用 read_context 讀取其介面
   calculate_tax:
@@ -44,6 +64,117 @@ modules:
         print("  - 建立 system_map.yaml 初始範本成功")
     else:
         print("  - system_map.yaml 已存在，跳過")
+
+    # 3. 建立 Docker 相關範本與 .gitignore
+    # 建立 .gitignore
+    gitignore_content = """# Python 暫存與虛擬環境
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# 打包與壓縮檔
+*.zip
+*.tar.gz
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+"""
+    if not os.path.exists(".gitignore"):
+        with open(".gitignore", "w", encoding="utf-8") as f:
+            f.write(gitignore_content)
+        print("  - 建立 .gitignore 成功")
+    else:
+        print("  - .gitignore 已存在，跳過")
+
+    # 建立 Dockerfile
+    dockerfile_content = """FROM python:3.11-slim
+
+WORKDIR /app
+
+# 複製依賴檔案並安裝
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 複製其餘代碼
+COPY . .
+
+CMD ["python", "main.py"]
+"""
+    if not os.path.exists("Dockerfile"):
+        with open("Dockerfile", "w", encoding="utf-8") as f:
+            f.write(dockerfile_content)
+        print("  - 建立 Dockerfile 範本成功")
+    else:
+        print("  - Dockerfile 已存在，跳過")
+
+    # 建立 docker-compose.yml
+    docker_compose_content = """version: '3.8'
+
+services:
+  app:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      - ENV=development
+"""
+    if not os.path.exists("docker-compose.yml"):
+        with open("docker-compose.yml", "w", encoding="utf-8") as f:
+            f.write(docker_compose_content)
+        print("  - 建立 docker-compose.yml 範本成功")
+    else:
+        print("  - docker-compose.yml 已存在，跳過")
+
+    # 建立 .dockerignore
+    dockerignore_content = """venv/
+.git/
+__pycache__/
+checkpoints/
+*.zip
+"""
+    if not os.path.exists(".dockerignore"):
+        with open(".dockerignore", "w", encoding="utf-8") as f:
+            f.write(dockerignore_content)
+        print("  - 建立 .dockerignore 成功")
+    else:
+        print("  - .dockerignore 已存在，跳過")
+
+    # 建立 requirements.txt
+    requirements_content = """pyyaml
+"""
+    if not os.path.exists("requirements.txt"):
+        with open("requirements.txt", "w", encoding="utf-8") as f:
+            f.write(requirements_content)
+        print("  - 建立 requirements.txt 成功")
+    else:
+        print("  - requirements.txt 已存在，跳過")
+
+    # 4. Git 初始化
+    if not os.path.exists(".git"):
+        try:
+            # 檢查 git 是否可用
+            subprocess.run(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            subprocess.run(["git", "init"], check=True)
+            print("  - Git 初始化成功")
+        except Exception as e:
+            print(f"  - [警告] Git 初始化失敗 (可能系統未安裝 Git): {e}")
+    else:
+        print("  - .git 已存在，跳過")
+
+    # 5. 建立 venv 虛擬環境
+    if not os.path.exists("venv"):
+        print("  - 正在建立 Python 虛擬環境 (venv)...")
+        try:
+            subprocess.run([sys.executable, "-m", "venv", "venv"], check=True)
+            print("  - Python 虛擬環境 (venv) 建立成功")
+        except Exception as e:
+            print(f"  - [警告] 建立 Python 虛擬環境失敗: {e}")
+    else:
+        print("  - venv 虛擬環境已存在，跳過")
 
     print("[ADAD] 專案初始化完成！")
 

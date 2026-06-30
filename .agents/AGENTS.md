@@ -34,6 +34,11 @@
   4. 🚧 【人工 Checkpoint 1】：人類審查架構草案，確認無誤後批准，推進狀態為 [validated]。
        │
        ▼
+[ Phase 1.5: 環境與容器規劃 ]
+  4.1. Agent 根據系統架構，於 `system_map.yaml` 的 `environment` 區塊規劃 Docker Compose 容器服務（狀態標記為 planned）。
+  4.2. 🚧 【人工 Checkpoint 1.5】：人類審查多容器架構配置，確認無誤後批准，推進狀態為 [validated] 並自動產生實體環境配置。
+       │
+       ▼
 [ Phase 2: 原子生成 ]
   5. 人類指派特定節點進行開發，系統呼叫 `read_context_by_node` 為 Agent 準備最小上下文。
   6. 人類呼叫 Agent，Agent 依照上下文與規範生成單一原子代碼。
