@@ -25,10 +25,125 @@ except ImportError:
 
 MAP_FILE = "system_map.yaml"
 
+def parse_markdown(md_content):
+    lines = md_content.splitlines()
+    data = {"version": 1, "modules": {}}
+    
+    current_module = None
+    current_section = None
+    
+    module_regex = re.compile(r'^#####\s+Module:\s*(\w+)')
+    field_regex = re.compile(r'^\s*-\s*([A-Za-z\s]+):\s*(.*)')
+    list_header_regex = re.compile(r'^\s*-\s*([A-Za-z\s]+):$')
+    
+    for line in lines:
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+            
+        m_match = module_regex.match(line_strip)
+        if m_match:
+            current_module = m_match.group(1)
+            data["modules"][current_module] = {
+                "type": "",
+                "description": "",
+                "dependencies": [],
+                "input": {},
+                "output": {},
+                "invariants": [],
+                "preferred_pattern": "none",
+                "verification": [],
+                "decisions": [],
+                "todo": [],
+                "checkpoint": []
+            }
+            current_section = None
+            continue
+            
+        if current_module is None:
+            if line_strip.startswith("- Version:"):
+                try:
+                    data["version"] = int(line_strip.split(":", 1)[1].strip())
+                except:
+                    pass
+            continue
+            
+        indent_match = re.match(r'^(\s+)-\s*(.*)', line)
+        if indent_match and current_section:
+            sub_content = indent_match.group(2).strip()
+            
+            if current_section == "input" or current_section == "output":
+                kv_match = re.match(r'^([\w_]+):\s*(.*)', sub_content)
+                if kv_match:
+                    k, v = kv_match.group(1), kv_match.group(2).strip()
+                    data["modules"][current_module][current_section][k] = v
+            elif current_section in ["invariants", "verification", "todo", "checkpoint"]:
+                data["modules"][current_module][current_section].append(sub_content)
+            continue
+            
+        lh_match = list_header_regex.match(line_strip)
+        if lh_match:
+            current_section = lh_match.group(1).strip().lower().replace(" ", "_")
+            continue
+            
+        f_match = field_regex.match(line_strip)
+        if f_match:
+            key = f_match.group(1).strip().lower().replace(" ", "_")
+            val = f_match.group(2).strip()
+            
+            if key == "type":
+                data["modules"][current_module]["type"] = val
+            elif key == "description":
+                data["modules"][current_module]["description"] = val
+            elif key == "preferred_pattern":
+                data["modules"][current_module]["preferred_pattern"] = val
+            elif key == "dependencies":
+                if val.startswith("[") and val.endswith("]"):
+                    items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
+                    data["modules"][current_module]["dependencies"] = items
+            elif key == "decisions":
+                if val.startswith("[") and val.endswith("]"):
+                    items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
+                    data["modules"][current_module]["decisions"] = items
+            
+            current_section = None
+            continue
+            
+    return data
+
 class ADADCore:
-    def __init__(self, map_path=MAP_FILE):
+    def __init__(self, map_path=MAP_FILE, check_validity=True):
         self.map_path = map_path
         self.data = self._load_map()
+        if check_validity:
+            valid_res = self.check_ir_validity()
+            if not valid_res["valid"]:
+                print(json.dumps({"success": False, "error": valid_res["error"]}, ensure_ascii=False, indent=2))
+                sys.exit(1)
+
+    def check_ir_validity(self):
+        md_path = "system_map.md"
+        yaml_path = self.map_path
+        
+        if os.path.exists(md_path):
+            if not os.path.exists(yaml_path):
+                return {
+                    "valid": False,
+                    "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
+                }
+            
+            md_mtime = os.path.getmtime(md_path)
+            yaml_mtime = os.path.getmtime(yaml_path)
+            
+            # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
+            if md_mtime > yaml_mtime + 1:
+                return {
+                    "valid": False,
+                    "error": f"架構源檔案 ({md_path}) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
+                }
+                
+        return {"valid": True}
+
 
     def _load_map(self):
         if not os.path.exists(self.map_path):
@@ -48,8 +163,145 @@ class ADADCore:
     def get_node(self, node_name):
         return self.data.get("modules", {}).get(node_name)
 
+    def _extract_adr_summary(self, adr_id):
+        """從 docs/adr/ 中提取設計決策摘要，僅抓取關鍵標題、狀態與決策內容以防範 Context 膨脹"""
+        adr_dir = os.path.join("docs", "adr")
+        file_path = os.path.join(adr_dir, f"{adr_id}.md")
+        
+        # 增加相對路徑的容錯
+        if not os.path.exists(file_path):
+            file_path = os.path.join("adr", f"{adr_id}.md")
+            
+        if not os.path.exists(file_path):
+            return {"adr_id": adr_id, "error": "決策文件不存在"}
+            
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as e:
+            return {"adr_id": adr_id, "error": f"無法讀取文件: {e}"}
+
+        title = f"{adr_id} (無標題)"
+        status = "Unknown"
+        decision = "No decision described."
+
+        # 1. 提取第一行標題
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if line_str.startswith("# "):
+                title = line_str[2:].strip()
+                break
+            else:
+                title = line_str
+                break
+
+        # 2. 逐行掃描，收集各 ## 段落
+        sections = {}
+        curr_sec = None
+        for line in lines:
+            line_str = line.strip()
+            if line_str.startswith("## "):
+                curr_sec = line_str[3:].strip().lower()
+                sections[curr_sec] = []
+            elif curr_sec and line_str.startswith("#"):
+                curr_sec = None
+            elif curr_sec:
+                if line_str:
+                    sections[curr_sec].append(line_str)
+
+        # 3. 提取狀態
+        for sec_name, content_lines in sections.items():
+            if "狀態" in sec_name or "status" in sec_name:
+                if content_lines:
+                    status = content_lines[0]
+                    break
+
+        # 4. 提取決策要點 (取前兩行非空行並合併)
+        for sec_name, content_lines in sections.items():
+            if "決策" in sec_name or "decision" in sec_name:
+                if content_lines:
+                    decision = " ".join(content_lines[:2])
+                    break
+
+        return {
+            "adr_id": adr_id,
+            "title": title,
+            "status": status,
+            "decision": decision
+        }
+
+    def _extract_pattern_summary(self, pattern_name):
+        """從 docs/patterns/ 中提取設計模式規範摘要，僅抓取關鍵標題、說明與程式碼規範"""
+        patterns_dir = os.path.join("docs", "patterns")
+        file_path = os.path.join(patterns_dir, f"{pattern_name}.md")
+        
+        if not os.path.exists(file_path):
+            file_path = os.path.join("patterns", f"{pattern_name}.md")
+            
+        if not os.path.exists(file_path):
+            return {"pattern_name": pattern_name, "error": "模式說明文件不存在"}
+            
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as e:
+            return {"pattern_name": pattern_name, "error": f"無法讀取文件: {e}"}
+
+        title = f"{pattern_name} 模式"
+        desc = "無說明"
+        rules = "無特別規範"
+
+        # 1. 提取標題
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if line_str.startswith("# "):
+                title = line_str[2:].strip()
+                break
+            else:
+                title = line_str
+                break
+
+        # 2. 逐行掃描，收集各 ## 段落
+        sections = {}
+        curr_sec = None
+        for line in lines:
+            line_str = line.strip()
+            if line_str.startswith("## "):
+                curr_sec = line_str[3:].strip().lower()
+                sections[curr_sec] = []
+            elif curr_sec and line_str.startswith("#"):
+                curr_sec = None
+            elif curr_sec:
+                if line_str:
+                    sections[curr_sec].append(line_str)
+
+        # 3. 提取說明
+        for sec_name, content_lines in sections.items():
+            if "說明" in sec_name or "description" in sec_name:
+                if content_lines:
+                    desc = content_lines[0]
+                    break
+
+        # 4. 提取規範要點 (取前兩行非空行並合併)
+        for sec_name, content_lines in sections.items():
+            if "規範" in sec_name or "rules" in sec_name or "code" in sec_name:
+                if content_lines:
+                    rules = " ".join(content_lines[:2])
+                    break
+
+        return {
+            "pattern_name": pattern_name,
+            "title": title,
+            "description": desc,
+            "rules": rules
+        }
+
     def read_context(self, node_name):
-        """讀取單一節點最小上下文 (該節點與其相依節點的 Interface)"""
+        """讀取單一節點最小上下文 (該節點與其相依節點的 Interface，並附帶設計決策與首選模式摘要)"""
         node = self.get_node(node_name)
         if not node:
             return {"error": f"找不到節點: {node_name}"}
@@ -66,6 +318,27 @@ class ADADCore:
             },
             "dependency_interfaces": {}
         }
+
+        # 智慧裁剪決策摘要並寫入 Context
+        decisions_summary = []
+        for adr_id in node.get("decisions", []):
+            adr_info = self._extract_adr_summary(adr_id)
+            if "error" in adr_info:
+                decisions_summary.append(f"{adr_id}: 決策檔案載入錯誤 - {adr_info['error']}")
+            else:
+                decisions_summary.append(f"{adr_info['title']} (狀態: {adr_info['status']}) - 決策: {adr_info['decision']}")
+        
+        if decisions_summary:
+            context["target_node"]["decisions_summary"] = decisions_summary
+
+        # 智慧載入首選設計模式摘要
+        pattern_name = node.get("preferred_pattern")
+        if pattern_name:
+            pat_info = self._extract_pattern_summary(pattern_name)
+            if "error" in pat_info:
+                context["target_node"]["preferred_pattern_summary"] = f"{pattern_name}: 模式檔案載入錯誤 - {pat_info['error']}"
+            else:
+                context["target_node"]["preferred_pattern_summary"] = f"{pat_info['title']} (說明: {pat_info['description']}) - 規範: {pat_info['rules']}"
 
         # 獲取相依節點的 Interface 資訊
         for dep in node.get("dependencies", []):
@@ -253,6 +526,50 @@ class ADADCore:
 
         return {"success": True, "message": "架構不變量 (Invariants) 檢查通過。"}
 
+    def verify_implementation(self, node_name, file_path=None):
+        """驗證指定節點的實作代碼是否符合 Verification 約束 (首波支援 must_have_assertions)"""
+        node = self.get_node(node_name)
+        if not node:
+            return {"success": False, "error": f"找不到節點: {node_name}"}
+
+        verification = node.get("verification", [])
+        if not verification:
+            return {"success": True, "message": "此節點未定義 verification 驗證條件，無須檢查。"}
+
+        if not file_path:
+            file_path = f"{node_name}.py"
+
+        if not os.path.exists(file_path):
+            return {"success": False, "error": f"找不到實作檔案: {file_path}"}
+
+        # 讀取並解析檔案 AST
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                tree = ast.parse(f.read(), filename=file_path)
+        except Exception as e:
+            return {"success": False, "error": f"解析檔案 {file_path} 失敗: {e}"}
+
+        # 檢查 must_have_assertions 限制
+        if "must_have_assertions" in verification:
+            class AssertVisitor(ast.NodeVisitor):
+                def __init__(self):
+                    self.has_assert = False
+
+                def visit_Assert(self, node_visitor):
+                    self.has_assert = True
+                    # 不用進一步遞迴
+
+            visitor = AssertVisitor()
+            visitor.visit(tree)
+
+            if not visitor.has_assert:
+                return {
+                    "success": False,
+                    "error": f"違反驗證條件 (Verification) 約束！檔案 {file_path} 必須包含至少一個 assert 語句作為自檢斷言。"
+                }
+
+        return {"success": True, "message": "驗證條件 (Verification) 檢查通過。"}
+
 
 # ================= 自我單元測試 =================
 def run_self_test():
@@ -298,7 +615,7 @@ def run_self_test():
         yaml.safe_dump(test_data, f)
         
     try:
-        core = ADADCore(test_file)
+        core = ADADCore(test_file, check_validity=False)
         
         # 1. 測試讀取上下文
         ctx = core.read_context("user_service")
@@ -340,6 +657,130 @@ def run_self_test():
             if os.path.exists(test_code_file):
                 os.remove(test_code_file)
         
+        # 6. 測試 ADR 設計決策提取與智慧裁剪
+        test_adr_file = os.path.join("docs", "adr", "ADR-TEST-999.md")
+        os.makedirs(os.path.dirname(test_adr_file), exist_ok=True)
+        
+        test_adr_content = """# ADR-TEST-999: 測試採用 Redis 進行快取
+        
+## 狀態
+Approved
+
+## 脈絡 (Context)
+因為 calculate_jp_tax 的頻繁調用...
+
+## 決策 (Decision)
+我們決定採用 Redis 作為快取，避免內存佔用並支援橫向擴充。
+這是第二行的決策要點。
+
+## 後果 (Consequences)
+需要額外的 Redis 服務。
+"""
+        with open(test_adr_file, "w", encoding="utf-8") as f:
+            f.write(test_adr_content)
+            
+        try:
+            core.get_node("calculate_jp_tax")["decisions"] = ["ADR-TEST-999"]
+            ctx = core.read_context("calculate_jp_tax")
+            assert "decisions_summary" in ctx["target_node"]
+            summary = ctx["target_node"]["decisions_summary"][0]
+            assert "測試採用 Redis 進行快取" in summary
+            assert "狀態: Approved" in summary
+            assert "我們決定採用 Redis 作為快取" in summary
+            assert "這是第二行的決策要點。" in summary
+            print("  - 測試 6: ADR 外部化決策與 Context 智慧裁剪提取成功")
+        finally:
+            if os.path.exists(test_adr_file):
+                os.remove(test_adr_file)
+
+        # 7. 測試模式載入與斷言檢查 (Verification)
+        test_pattern_file = os.path.join("docs", "patterns", "test_pattern.md")
+        os.makedirs(os.path.dirname(test_pattern_file), exist_ok=True)
+        
+        test_pattern_content = """# Test Pattern 模式規範
+
+## 說明
+這是一個用來自我測試的模式說明。
+
+## 規範
+- 第一條規範：必須要寫得很好。
+- 第二條規範：一定要遵守。
+"""
+        with open(test_pattern_file, "w", encoding="utf-8") as f:
+            f.write(test_pattern_content)
+            
+        test_impl_file = "test_impl_file.py"
+        try:
+            # 7.1 驗證模式載入與裁剪
+            core.get_node("calculate_jp_tax")["preferred_pattern"] = "test_pattern"
+            ctx = core.read_context("calculate_jp_tax")
+            assert "preferred_pattern_summary" in ctx["target_node"]
+            pat_summary = ctx["target_node"]["preferred_pattern_summary"]
+            assert "Test Pattern" in pat_summary
+            assert "說明: 這是一個用來自我測試的模式說明。" in pat_summary
+            assert "規範: - 第一條規範：必須要寫得很好。 - 第二條規範：一定要遵守。" in pat_summary
+            print("  - 測試 7.1: 設計模式外部化與 Context 智慧載入成功")
+            
+            # 7.2 驗證無斷言的阻斷
+            core.get_node("calculate_jp_tax")["verification"] = ["must_have_assertions"]
+            
+            with open(test_impl_file, "w", encoding="utf-8") as f:
+                f.write("def func():\n    return 42\n")
+            
+            res_fail = core.verify_implementation("calculate_jp_tax", test_impl_file)
+            assert res_fail["success"] is False
+            assert "必須包含至少一個 assert" in res_fail["error"]
+            print("  - 測試 7.2: Verification 無斷言實作自動阻斷成功")
+            
+            # 7.3 驗證有斷言的通過
+            with open(test_impl_file, "w", encoding="utf-8") as f:
+                f.write("def func():\n    assert True\n    return 42\n")
+                
+            res_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
+            assert res_pass["success"] is True
+            print("  - 測試 7.3: Verification 有斷言實作順利通過成功")
+            
+        finally:
+            if os.path.exists(test_pattern_file):
+                os.remove(test_pattern_file)
+            if os.path.exists(test_impl_file):
+                os.remove(test_impl_file)
+
+        # 8. 測試 Markdown 解析 (parse_markdown)
+        test_md_content = """# Title
+## Metadata
+- Version: 3
+
+##### Module: test_mod
+- Type: tool
+- Description: 測試模組
+- Dependencies: [dep1, dep2]
+- Decisions: [ADR-001]
+- Preferred Pattern: pure_function
+- Input:
+  - arg1: int
+- Output:
+  - res1: string
+- TODO:
+  - [ ] todo1
+- Checkpoint:
+  - [ ] CP-1-001 (planned)
+"""
+        parsed = parse_markdown(test_md_content)
+        assert parsed["version"] == 3
+        assert "test_mod" in parsed["modules"]
+        mod = parsed["modules"]["test_mod"]
+        assert mod["type"] == "tool"
+        assert mod["description"] == "測試模組"
+        assert mod["dependencies"] == ["dep1", "dep2"]
+        assert mod["decisions"] == ["ADR-001"]
+        assert mod["preferred_pattern"] == "pure_function"
+        assert mod["input"]["arg1"] == "int"
+        assert mod["output"]["res1"] == "string"
+        assert len(mod["todo"]) == 1 and "todo1" in mod["todo"][0]
+        assert len(mod["checkpoint"]) == 1 and "CP-1-001" in mod["checkpoint"][0]
+        print("  - 測試 8: Markdown 解析 (parse_markdown) 成功")
+
         print("[ADAD Test] 所有測試順利通過！")
         
     finally:

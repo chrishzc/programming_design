@@ -24,46 +24,109 @@ def init_project():
     else:
         print("  - checkpoints/ 目錄已存在，跳過")
 
-    # 2. 建立 system_map.yaml 初始範本
-    if not os.path.exists("system_map.yaml"):
-        default_map = """version: 1
-environment:
-  compose_arch: true
-  state: "planned"
-  services:
-    backend:
-      type: "container"
-      build: "./backend"
-      ports:
-        - "8000:8000"
-      environment:
-        - "ENV=development"
-      depends_on:
-        - "db"
-    db:
-      type: "container"
-      image: "postgres:15-alpine"
-      volumes:
-        - "db_data:/var/lib/postgresql/data"
-
-modules:
-  # 範例節點：請使用 transit_state 推進其生命週期，或使用 read_context 讀取其介面
-  calculate_tax:
-    type: "function"
-    state: "planned"
-    dependencies: []
-    input:
-      amount: "float"
-      country: "string"
-    output:
-      tax: "float"
-    description: "計算各國稅金的最簡原子函數"
-"""
-        with open("system_map.yaml", "w", encoding="utf-8") as f:
-            f.write(default_map)
-        print("  - 建立 system_map.yaml 初始範本成功")
+    # 1.2 建立 docs/adr 目錄與範本
+    adr_dir = os.path.join("docs", "adr")
+    if not os.path.exists(adr_dir):
+        os.makedirs(adr_dir)
+        print("  - 建立 docs/adr/ 目錄成功")
     else:
-        print("  - system_map.yaml 已存在，跳過")
+        print("  - docs/adr/ 目錄已存在，跳過")
+
+    template_path = os.path.join(adr_dir, "ADR-000_template.md")
+    if not os.path.exists(template_path):
+        adr_template = """# ADR-000: 設計決策範本 (在此填寫決策標題)
+
+## 狀態
+Draft / Proposed / Approved / Rejected / Deprecated
+
+## 脈絡 (Context)
+在此說明此決策的背景脈絡、當前面臨的問題、需求或限制條件。
+
+## 決策 (Decision)
+在此寫下我們最終採用的方案（例如：採用 Redis 作為快取介質、採用 Event-Driven 進行模組解耦等），並扼要說明選擇此方案的原因。
+
+## 後果 (Consequences)
+在此列出採用此決策後帶來的優缺點、副作用或需要連帶調整的部分。
+"""
+        with open(template_path, "w", encoding="utf-8") as f:
+            f.write(adr_template)
+        print("  - 建立 ADR-000_template.md 成功")
+    else:
+        print("  - ADR-000_template.md 已存在，跳過")
+
+    # 1.3 建立 docs/patterns 目錄與範本
+    patterns_dir = os.path.join("docs", "patterns")
+    if not os.path.exists(patterns_dir):
+        os.makedirs(patterns_dir)
+        print("  - 建立 docs/patterns/ 目錄成功")
+    else:
+        print("  - docs/patterns/ 目錄已存在，跳過")
+
+    pattern_template_path = os.path.join(patterns_dir, "pure_function.md")
+    if not os.path.exists(pattern_template_path):
+        pattern_template = """# Pure Function 模式規範
+
+## 說明
+此節點必須實作為無副作用的純函數 (Pure Function)。
+
+## 程式碼規範
+- 輸入引數必須為 immutable，禁止在函數內修改傳入的參數。
+- 函數返回值僅由輸入引數決定，禁止存取任何外部全域變量。
+- 禁止呼叫任何會產生 Side Effect 的函數（如 I/O 操作、資料庫寫入或發送網路請求）。
+"""
+        with open(pattern_template_path, "w", encoding="utf-8") as f:
+            f.write(pattern_template)
+        print("  - 建立 pure_function.md 成功")
+    else:
+        print("  - pure_function.md 已存在，跳過")
+
+    # 2. 建立 system_map.md 初始範本
+    if not os.path.exists("system_map.md"):
+        default_map = """# ADAD Architecture Source
+
+## Metadata
+- Version: 1
+- Status: planning
+
+## Domains
+
+### Domain: Calculation
+- Description: 專門進行核心稅率與商務計算的領域。
+
+#### Subsystem: Core_Calculator
+- Description: 負責各國與各類型稅務核心計算子系統。
+
+##### Module: calculate_tax
+- Type: function
+- Description: 計算各國稅金的最簡原子函數
+- Preferred Pattern: pure_function
+- Decisions: []
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - amount: float
+  - country: string
+- Output:
+  - tax: float
+- TODO:
+  - [ ] 補齊細部國家的例外稅率支持
+- Checkpoint:
+  - [ ] CP-1-001 (planned)
+"""
+        with open("system_map.md", "w", encoding="utf-8") as f:
+            f.write(default_map)
+        print("  - 建立 system_map.md 初始範本成功")
+        
+        # 自動執行編譯以產生 system_map.yaml (IR)
+        try:
+            print("  - 正在自動編譯架構源檔案...")
+            subprocess.run([sys.executable, ".agents/skills/adad-workflow/scripts/compile_map.py"], check=True)
+            print("  - 自動編譯成功，已產生 system_map.yaml")
+        except Exception as e:
+            print(f"  - [警告] 自動編譯架構源檔案失敗: {e}")
+    else:
+        print("  - system_map.md 已存在，跳過")
 
     # 3. 建立 Docker 相關範本與 .gitignore
     # 建立 .gitignore
@@ -251,7 +314,7 @@ def pack_dist():
 def main():
     if len(sys.argv) < 2:
         print("ADAD 部署工具說明：")
-        print("  python install.py init    - 在當前專案目錄初始化 ADAD (建立 checkpoints, system_map.yaml)")
+        print("  python install.py init    - 在當前專案目錄初始化 ADAD (建立 checkpoints, system_map.md)")
         print("  python install.py global  - 將本規範與 Skill 部署至 Antigravity 全域設定 (供所有專案使用)")
         print("  python install.py pack    - 打包 .agents 客製化目錄為 zip 檔，便於上傳 GitHub 發布")
         sys.exit(1)

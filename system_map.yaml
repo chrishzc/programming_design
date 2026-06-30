@@ -2,43 +2,76 @@ version: 1
 modules:
   read_context:
     type: tool
-    state: deployed
+    description: 讀取單一節點最小上下文的輔助工具
     dependencies: []
     input:
       node_name: string
     output:
       context: object
-    description: 讀取單一節點最小上下文的輔助工具
-
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊與其他 UI 工具串接的 context 回傳欄位'
+    checkpoint:
+    - '[x] CP-1-001 (validated)'
+    - '[x] CP-2-001 (deployed)'
+    state: deployed
   check_normalization:
     type: tool
-    state: deployed
+    description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
     dependencies: []
     input:
       proposed_function: string
     output:
       result: object
-    description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
     invariants:
-      - "deny_imports: [pymysql]"
-
+    - 'deny_imports: [pymysql]'
+    preferred_pattern: pure_function
+    verification:
+    - must_have_assertions
+    decisions: []
+    todo:
+    - '[ ] 支持更加複雜的模糊關鍵字權重分析比對'
+    checkpoint:
+    - '[x] CP-1-002 (validated)'
+    - '[x] CP-2-002 (deployed)'
+    state: deployed
   analyze_cascade:
     type: tool
-    state: deployed
+    description: 執行髒點級聯依賴分析的 DAG 走查工具
     dependencies: []
     input:
       changed_node_name: string
     output:
       dirty_nodes: array
-    description: 執行髒點級聯依賴分析的 DAG 走查工具
-
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 優化多重循環依賴的死循環防範機制'
+    checkpoint:
+    - '[x] CP-1-003 (validated)'
+    - '[x] CP-2-003 (deployed)'
+    state: deployed
   transit_state:
     type: tool
-    state: deployed
+    description: 推進或變更模組生命週期狀態的狀態機工具
     dependencies: []
     input:
       node_name: string
       next_state: string
     output:
       result: object
-    description: 推進或變更模組生命週期狀態的狀態機工具
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 結合 Git Hook 自動觸發狀態轉移'
+    checkpoint:
+    - '[x] CP-1-004 (validated)'
+    - '[x] CP-2-004 (deployed)'
+    state: deployed
