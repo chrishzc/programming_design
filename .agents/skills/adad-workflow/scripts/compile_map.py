@@ -60,6 +60,9 @@ def main():
     # 3. 寫入並更新 YAML
     core.data["version"] = compiled_data.get("version", 1)
     core.data["modules"] = compiled_data.get("modules", {})
+
+    # 3.5 Draft Debt Ledger 偵測
+    debt_result = core.check_draft_debt()
     core.save()
     
     # 強制確保 system_map.yaml 的修改時間稍微新於 system_map.md (大於 1.5 秒)
@@ -68,10 +71,21 @@ def main():
         os.utime(yaml_path, None)
     except Exception:
         pass
+
+    # 輸出 Draft Debt 警告（若有觸發）
+    if debt_result["checkpoint_required"]:
+        print("\n⚠️  [DRAFT DEBT] 以下模組因 fan-in 突破閾值，已自動升級為 pending_review：")
+        for p in debt_result["promoted_nodes"]:
+            if "old_fan_in" in p:
+                print(f"   - {p['node']} (fan-in: {p['old_fan_in']} → {p['new_fan_in']})")
+            else:
+                print(f"   - {p['node']} (原因: {p.get('reason', 'N/A')})")
+        print("🚧 需要觸發一次補做 Checkpoint（含 ADR），請執行架構審查。\n")
         
     print(json.dumps({
         "success": True,
-        "message": f"編譯成功！已將 {md_path} 編譯為 {yaml_path}，並完成狀態合併。"
+        "message": f"編譯成功！已將 {md_path} 編譯為 {yaml_path}，並完成狀態合併。",
+        "draft_debt": debt_result
     }, ensure_ascii=False, indent=2))
     sys.exit(0)
 

@@ -8,21 +8,53 @@
 
 你必須無條件遵守以下四大規則：
 
-> ### 🛑 [RULE-01] SSOT 唯一性
+> ### 🛑 [RULE-01] SSOT 唯一性 🔒 **機器強制**
 > 你唯一的系統架構記憶與事實來源為根目錄底下的 `system_map.yaml`。**嚴禁自行在代碼中衍生或假設未記載於該檔案的介面、路由或規格。**
+> **執行方式**：Pre-commit hook 自動阻斷過期的 `system_map.yaml`（若 `.md` 較新則禁止 commit）。
 >
-> ### 🛑 [RULE-02] 先架構後程式 (拒絕 Code-First)
-> 嚴禁 Code-First 開發。只有在目標節點（Function / API / Class）於 `system_map.yaml` 中的狀態為 `planned` 或 `dirty`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。
+> ### 🛑 [RULE-02] 先架構後程式 (拒絕 Code-First) 🔒 **機器強制**
+> 嚴禁 Code-First 開發。只有在目標節點（Function / API / Class）於 `system_map.yaml` 中的狀態為 `planned`、`dirty`、`validated` 或 `draft`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。
+> **執行方式**：Pre-commit hook 比對 staged 檔案與模組狀態，非允許狀態的節點禁止修改程式碼。
 >
-> ### 🛑 [RULE-03] 原子化操作 (Atomic Scope)
+> ### 🛑 [RULE-03] 原子化操作 (Atomic Scope) ⚠️ **機器警告**
 > 你每次的輸出（Output Payload / 程式碼修改）**只能影響單一節點（單一函數、API 或組件）**。嚴禁進行跨模組、跨檔案的大規模 Patch 程式碼。
+> **執行方式**：Pre-commit hook 偵測跨模組修改時發出 WARNING（不阻斷，允許必要的跨模組重構）。
 >
-> ### 🛑 [RULE-04] 遇錯即停 (Fail-Fast)
+> ### 🛑 [RULE-04] 遇錯即停 (Fail-Fast) 📝 **Agent 行為規則**
 > 在 Phase 2（實作期）若發現 `system_map.yaml` 所定義的架構規格無法滿足邏輯需求（例如：發現少傳引數、需要多回傳欄位等），**你必須立即中斷程式碼生成**，改為輸出 `Schema Update Request` 格式，並等待人類審核。
+> **執行方式**：無法由機器強制，保留為 Agent 行為約束。
 
 ---
 
-## 🔄 3. ADAD 人機協作工作流 (Human-Agent Workflow)
+## 🔒 機器強制檢查 (Pre-Commit Hook)
+
+以下檢查在每次 `git commit` 時自動執行，不依賴 Agent 自律：
+
+| # | 檢查項目 | 對應規則 | 失敗行為 |
+|---|---------|---------|---------|
+| 1 | Staleness 阻斷 | RULE-01 | ❌ 阻斷 commit |
+| 2 | 狀態門禁 | RULE-02 | ❌ 阻斷 commit |
+| 3 | 原子範圍 | RULE-03 | ⚠️ 警告（不阻斷） |
+| 4 | Invariants (deny_imports) | 架構邊界 | ❌ 阻斷 commit |
+| 5 | Verification (must_have_assertions) | 實作品質 | ❌ 阻斷 commit |
+
+緊急情況可用 `git commit --no-verify` 繞過。
+
+---
+
+## 📋 Draft Debt Ledger
+
+當模組以 `draft` 狀態存在時（Leaf 模式生成的 demo 模組），系統會追蹤其 **fan-in**（有多少其他模組依賴它）。
+
+**自動升級規則**：
+- 當 draft 模組的 fan-in 從 0 變為 **≥2**（被 2 個以上模組依賴），系統自動將其及所有新依賴它的節點標記為 `pending_review`。
+- 此時強制觸發一次補做 Checkpoint（含 ADR），確保 demo 期代碼在變重要時經過正式審查。
+
+**觸發條件是結構性的（依賴關係變化），不依賴人類記憶。**
+
+---
+
+## 🔄 ADAD 人機協作工作流 (Human-Agent Workflow)
 
 此工作流以**人類（架構師/開發者）**為主動驅動者，**Agent** 則作為被動呼叫的原子執行單元。整體流程透過多個 **Checkpoint** 由人類進行決策與狀態推進。
 

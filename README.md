@@ -39,8 +39,9 @@ programming_design/
 │           ├── SKILL.md          # Skill 定義與 Antigravity 調用引導
 │           └── scripts/          # Antigravity 藉由 run_command 執行的輔助 Python 腳本
 │               ├── adad_core.py  # 核心引擎 (Markdown 解析、IR 讀寫、DAG 分析、過期阻斷)
-│               ├── compile_map.py # Architecture Compiler (Markdown ➔ YAML 狀態合併)
-│               ├── resume_analysis.py # Resume 分析器 (進度統計與智能下一步建議)
+│               ├── compile_map.py # Architecture Compiler (Markdown ➔ YAML 狀態合併 + Draft Debt 偵測)
+│               ├── resume_analysis.py # Resume 分析器 (進度統計、智能下一步建議、Draft Debt Ledger)
+│               ├── adad_pre_commit.py # Pre-Commit Hook (機械強制 RULE-01/02/03 + Invariants + Verification)
 │               ├── read_context.py
 │               ├── check_normalization.py
 │               ├── analyze_cascade.py
@@ -50,20 +51,39 @@ programming_design/
 ├── checkpoints/                  # Checkpoint 決策歷史存檔目錄 (CP-X-XXX.yaml)
 ├── system_map.md                 # 專案架構唯一事實來源 (SSOT - Architecture Source)
 ├── system_map.yaml               # 專案架構中間表示檔 (SSOT - Architecture IR)
-├── install.py                    # 安裝、初始化與打包指令腳本
+├── install.py                    # 安裝、初始化與打包指令腳本 (含 pre-commit hook 自動安裝)
 └── README.md                     # 本說明文件
 ```
 
 ---
+## 🚀 快速上手（即插即用）
+
+只要在 Windows 上執行以下三步，即可在任何 Antigravity 專案中使用本 ADAD skill：
+
+1. 下載程式碼
+   ```bat
+   git clone <repo‑url>
+   cd programming_design
+   ```
+2. 執行一次性安裝腳本（會自動建立 venv、安裝依賴、編譯 system_map）
+   ```bat
+   run_cli.bat
+   ```
+3. 完成後即可直接呼叫 ADAD CLI，例如：
+   ```bat
+   venv\Scripts\python .agents\skills\adad-workflow\scripts\read_context.py <node_name>
+   ```
+
+此流程會在專案根目錄下產生 `venv/`、`requirements.txt`、`system_map.yaml`，且不會改變 `system_map.md` 的內容，符合 ADAD 「先架構後程式」的原則。
 
 ## 🛡️ 核心開發憲法 (Global Rules)
 
 不論 Agent 執行哪一個階段的任務，都必須強制遵循以下元規則（Meta-Rules）：
 
-> *   **[RULE-01] SSOT 唯一性**：你唯一的記憶與事實來源為 `system_map.yaml` (自 `system_map.md` 編譯而來)。**嚴禁自行在代碼中衍生或假設未記載於該檔案的介面、路由或規格。**
-> *   **[RULE-02] 先架構後程式 (拒絕 Code-First)**：嚴禁 Code-First 開發。只有在目標節點於 `system_map.yaml` 中的狀態為 `planned` 或 `dirty`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。
-> *   **[RULE-03] 原子化操作 (Atomic Scope)**：你每次的輸出（程式碼修改）**只能影響單一節點（單一函數、API 或組件）**。嚴禁進行跨模組、跨檔案的大規模 Patch 程式碼。
-> *   **[RULE-04] 遇錯即停 (Fail-Fast)**：在 Phase 2（實作期）若發現架構規格無法滿足邏輯需求（例如：發現少傳引數、需要多回傳欄位等），**你必須立即中斷程式碼生成**，改為輸出 `Schema Update Request` 格式，並等待人類審核。
+> *   **[RULE-01] SSOT 唯一性** 🔒 **機器強制**：你唯一的記憶與事實來源為 `system_map.yaml` (自 `system_map.md` 編譯而來)。**嚴禁自行在代碼中衍生或假設未記載於該檔案的介面、路由或規格。** Pre-commit hook 自動阻斷過期的 `system_map.yaml`。
+> *   **[RULE-02] 先架構後程式 (拒絕 Code-First)** 🔒 **機器強制**：嚴禁 Code-First 開發。只有在目標節點於 `system_map.yaml` 中的狀態為 `planned`、`dirty`、`validated` 或 `draft`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。Pre-commit hook 比對 staged 檔案與模組狀態。
+> *   **[RULE-03] 原子化操作 (Atomic Scope)** ⚠️ **機器警告**：你每次的輸出（程式碼修改）**只能影響單一節點（單一函數、API 或組件）**。嚴禁進行跨模組、跨檔案的大規模 Patch 程式碼。Pre-commit hook 偵測跨模組修改時發出 WARNING。
+> *   **[RULE-04] 遇錯即停 (Fail-Fast)** 📝 **Agent 行為規則**：在 Phase 2（實作期）若發現架構規格無法滿足邏輯需求（例如：發現少傳引數、需要多回傳欄位等），**你必須立即中斷程式碼生成**，改為輸出 `Schema Update Request` 格式，並等待人類審核。
 
 ---
 
@@ -73,14 +93,15 @@ programming_design/
 
 | 工具腳本 | 功能說明 | 調用時機 |
 | :--- | :--- | :--- |
-| `compile_map.py` | 編譯 `system_map.md` ➔ `system_map.yaml` | 修改 Markdown 架構源後首要執行 |
-| `resume_analysis.py` | 分析架構 TODO 與智能推薦下一步 | 開發重啟、或人類要求進度概覽時執行 |
+| `compile_map.py` | 編譯 `system_map.md` ➔ `system_map.yaml` + Draft Debt 偵測 | 修改 Markdown 架構源後首要執行 |
+| `resume_analysis.py` | 分析架構進度、Draft Debt Ledger 與智能推薦下一步 | 開發重啟、或人類要求進度概覽時執行 |
 | `read_context.py` | 讀取單一節點最小上下文 (已包含 ADR & 模式注入) | Phase 2 開始編寫代碼前，獲取目標簽章 |
 | `check_normalization.py` | 執行 Rule of Two 檢查 | Phase 1 架構規劃期，檢測是否重複造輪子 |
 | `analyze_cascade.py` | 執行髒點依賴分析 (DAG 走查) | Phase 3 反向同步，架構變更時級聯標記 `dirty` |
-| `transit_state.py` | 推進/變更模組生命週期狀態 | CP 審查通過、Lint 通過或被退回時更新狀態 |
+| `transit_state.py` | 推進/變更模組生命週期狀態（硬化版：非法轉移阻斷） | CP 審查通過、Lint 通過或被退回時更新狀態 |
 | `verify_implementation.py` | 執行代碼實現驗證條件（如 assert）校驗 | 原子代碼生成完畢後進行自檢驗證 |
 | `check_invariants.py` | 執行不變量約束（如 deny_imports）校驗 | 原子代碼生成完畢後進行靜態 AST 檢查 |
+| `adad_pre_commit.py` | Pre-Commit Hook（機械強制 5 項檢查） | 每次 `git commit` 自動執行，或手動呼叫 |
 
 ---
 
@@ -441,3 +462,25 @@ checkpoint_payload:
 
 ### 6. 思路重啟 (Resume) 與下一步智能推薦
 *   **改善邏輯**：為解決 Agent 中途接手難以恢復設計思路的痛點，實作了 `resume_analysis.py`。能輸出詳細 TODO 與 Checkpoints 進度報告。更基於 DAG 拓撲分析，篩選出**依賴項均已 deployed 但自身尚未 deployed 的模組**，智能推薦最合理的下一步開發重點。
+
+### 7. Draft Debt Ledger（草稿債務追蹤）
+*   **改善邏輯**：新增 `draft` 與 `pending_review` 兩個生命週期狀態，專為 Leaf 模式（demo 期、快速原型）設計。
+    *   **draft 狀態**：Leaf 模式下生成的模組標記為 `draft`，進入 `resume_analysis.py` 的待補清單。
+    *   **自動升級**：當 draft 模組的 **fan-in**（被依賴次數）從 0 變為 ≥2 時，系統自動將其及所有新依賴它的節點標記為 `pending_review`，強制觸發一次補做 Checkpoint（含 ADR）。
+    *   **結構訊號驅動**：觸發條件是結構性的（依賴關係變化），不依賴人類記憶。這比「定期手動回顧 demo 期代碼」可靠得多。
+
+### 8. 軟規則硬化（Pre-Commit Hook 機械強制）
+*   **改善邏輯**：將原本只存在於 `AGENTS.md` 文字中的軟規則，轉為 `git pre-commit hook` 機械執行：
+
+    | 檢查項目 | 對應規則 | 失敗行為 |
+    |---------|---------|----------|
+    | Staleness 阻斷 | RULE-01 SSOT | ❌ 阻斷 commit |
+    | 狀態門禁 | RULE-02 先架構後程式 | ❌ 阻斷 commit |
+    | 原子範圍 | RULE-03 原子化操作 | ⚠️ 警告（不阻斷） |
+    | Invariants (deny_imports) | 架構邊界 | ❌ 阻斷 commit |
+    | Verification (must_have_assertions) | 實作品質 | ❌ 阻斷 commit |
+
+    核心保證由機器全程強制，分級只影響「需不需要人類額外審查文件」，不影響「會不會真的改A壞B」這個底線。
+
+### 9. 狀態轉移硬化
+*   **改善邏輯**：`transit_state()` 從原本的 WARNING（允許非法轉移）改為 ERROR + 阻斷。非法的狀態轉移會直接返回錯誤，不再允許執行，確保狀態機的完整性。

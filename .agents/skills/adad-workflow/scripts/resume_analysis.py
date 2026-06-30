@@ -35,6 +35,7 @@ def main():
     completed_modules = []
     dirty_modules = []
     planned_modules = []
+    draft_modules = []
     
     todo_list = []
     pending_checkpoints = []
@@ -46,6 +47,8 @@ def main():
             completed_modules.append(mod_name)
         elif actual_state == "dirty":
             dirty_modules.append(mod_name)
+        elif actual_state in ("draft", "pending_review"):
+            draft_modules.append((mod_name, actual_state))
         else:
             planned_modules.append(mod_name)
             
@@ -73,6 +76,12 @@ def main():
             if all_deps_deployed:
                 next_suggestions.append((mod_name, actual_state))
                 
+    # 計算 fan-in
+    fan_in_map = {}
+    for mod_name, mod_info in actual_modules.items():
+        for dep in mod_info.get("dependencies", []):
+            fan_in_map[dep] = fan_in_map.get(dep, 0) + 1
+
     # 輸出 Markdown 報告
     print(f"# 📊 ADAD Architecture Resume Analysis")
     print(f"\n## 📈 目前架構進度")
@@ -85,6 +94,10 @@ def main():
     print(f"- **規劃中 (Planned/Validated)**: {len(planned_modules)}")
     for m in planned_modules:
         print(f"  - `{m}` (狀態: `{actual_modules.get(m, {}).get('state', 'planned')}`)")
+    if draft_modules:
+        print(f"- **草稿 (Draft/Pending Review)**: {len(draft_modules)}")
+        for m, state in draft_modules:
+            print(f"  - `{m}` (狀態: `{state}`)")
         
     print(f"\n## 📝 待辦事項 (TODO)")
     if todo_list:
@@ -109,6 +122,25 @@ def main():
         print("恭喜！所有規劃的架構模組均已完成部署。")
     else:
         print("由於存在循環依賴或未部署的底層依賴，請先檢查是否有依賴未定義。")
+
+    # Draft Debt Ledger
+    all_draft = [(name, info) for name, info in actual_modules.items()
+                 if info.get("state") in ("draft", "pending_review")]
+    if all_draft:
+        print(f"\n## 📋 Draft Debt Ledger")
+        print("以下模組仍處於 draft/pending_review 狀態，尚未經過正式 Checkpoint 審查：\n")
+        print("| 模組名稱 | 當前 Fan-In | 狀態 | 風險等級 |")
+        print("|----------|------------|------|---------|")
+        for name, info in all_draft:
+            fi = fan_in_map.get(name, 0)
+            state = info.get("state", "draft")
+            if state == "pending_review":
+                risk = "🔴 高（已觸發，等待 CP）"
+            elif fi >= 1:
+                risk = "🟡 中（有依賴者）"
+            else:
+                risk = "🟢 低（無依賴者）"
+            print(f"| `{name}` | {fi} | `{state}` | {risk} |")
         
 if __name__ == "__main__":
     main()

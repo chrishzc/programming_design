@@ -47,6 +47,7 @@ def parse_markdown(md_content):
             data["modules"][current_module] = {
                 "type": "",
                 "description": "",
+                "source": "",
                 "dependencies": [],
                 "input": {},
                 "output": {},
@@ -95,6 +96,8 @@ def parse_markdown(md_content):
                 data["modules"][current_module]["type"] = val
             elif key == "description":
                 data["modules"][current_module]["description"] = val
+            elif key == "source":
+                data["modules"][current_module]["source"] = val
             elif key == "preferred_pattern":
                 data["modules"][current_module]["preferred_pattern"] = val
             elif key == "dependencies":
@@ -420,26 +423,82 @@ class ADADCore:
         return dirty_list
 
     def transit_state(self, node_name, next_state):
-        """模組生命週期狀態轉移與校驗"""
+        """模組生命週期狀態轉移與校驗（硬化版：非法轉移直接阻斷）"""
         node = self.get_node(node_name)
         if not node:
             return {"success": False, "error": f"找不到節點: {node_name}"}
 
         curr_state = node.get("state", "planned")
         valid_transitions = {
-            "planned": ["validated"],
-            "validated": ["dirty", "linted/tested"],
-            "dirty": ["validated", "linted/tested"],
-            "linted/tested": ["deployed", "dirty"],
-            "deployed": ["dirty"]
+            "draft":          ["pending_review"],
+            "pending_review": ["validated", "dirty"],
+            "planned":        ["validated"],
+            "validated":      ["dirty", "linted/tested"],
+            "dirty":          ["validated", "linted/tested"],
+            "linted/tested":  ["deployed", "dirty"],
+            "deployed":       ["dirty"],
         }
 
-        # 開放人類強制變更為任何狀態，但提示非典型轉換
+        # ponytail: 硬化——非法轉移直接阻斷，不再只是 WARNING
         if next_state not in valid_transitions.get(curr_state, []):
-            print(f"[ADAD WARNING] 節點 {node_name} 進行非典型狀態轉換: {curr_state} ➔ {next_state}")
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 非法狀態轉移: {curr_state} → {next_state}。"
+                         f"合法目標: {valid_transitions.get(curr_state, [])}"
+            }
 
         node["state"] = next_state
         return {"success": True, "from": curr_state, "to": next_state}
+
+    def get_fan_in_map(self):
+        """回傳 {module_name: fan_in_count}，fan-in = 有多少模組依賴此節點"""
+        modules = self.data.get("modules", {})
+        fan_in = {name: 0 for name in modules}
+        for name, info in modules.items():
+            for dep in info.get("dependencies", []):
+                if dep in fan_in:
+                    fan_in[dep] += 1
+        return fan_in
+
+    def check_draft_debt(self):
+        """
+        Draft Debt Ledger 核心偵測。
+        掃描所有 draft 模組的 fan-in 變化：
+        若 fan-in 從 snapshot=0 變為 ≥2，將該模組及所有新依賴它的節點標記為 pending_review。
+        回傳 {promoted_nodes: [...], checkpoint_required: bool}
+        """
+        modules = self.data.get("modules", {})
+        current_fan_in = self.get_fan_in_map()
+
+        # 建立反向鄰接表：adj[dep] = [依賴 dep 的模組們]
+        adj = {name: [] for name in modules}
+        for name, info in modules.items():
+            for dep in info.get("dependencies", []):
+                if dep in adj:
+                    adj[dep].append(name)
+
+        promoted = []
+        for name, info in modules.items():
+            if info.get("state") != "draft":
+                continue
+            old_fan_in = info.get("fan_in_snapshot", 0)
+            new_fan_in = current_fan_in.get(name, 0)
+            if old_fan_in == 0 and new_fan_in >= 2:
+                # 升級 draft → pending_review
+                info["state"] = "pending_review"
+                promoted.append({"node": name, "old_fan_in": old_fan_in, "new_fan_in": new_fan_in})
+                # 所有新依賴它的節點也標記為 pending_review
+                for dependent in adj.get(name, []):
+                    dep_info = modules.get(dependent)
+                    if dep_info and dep_info.get("state") not in ("pending_review",):
+                        dep_info["state"] = "pending_review"
+                        promoted.append({"node": dependent, "reason": f"依賴 {name}"})
+
+        # 更新所有模組的 fan_in_snapshot
+        for name in modules:
+            modules[name]["fan_in_snapshot"] = current_fan_in.get(name, 0)
+
+        return {"promoted_nodes": promoted, "checkpoint_required": len(promoted) > 0}
 
     def check_invariants(self, node_name, file_path=None):
         """檢查指定節點的實作檔案是否符合 Invariant 規則 (首波支援 deny_imports)"""
@@ -635,10 +694,37 @@ def run_self_test():
         assert core.get_node("user_service")["state"] == "dirty"
         print("  - 測試 3: DAG 髒點依賴級聯分析成功")
 
-        # 4. 測試狀態轉換
-        core.transit_state("db_connector", "validated")
+        # 4. 測試狀態轉換（硬化版）
+        res_ok = core.transit_state("db_connector", "validated")
+        assert res_ok["success"] is True
         assert core.get_node("db_connector")["state"] == "validated"
-        print("  - 測試 4: 狀態機轉換成功")
+        # 非法轉移應被阻斷
+        res_bad = core.transit_state("db_connector", "deployed")
+        assert res_bad["success"] is False
+        assert "BLOCKED" in res_bad["error"]
+        print("  - 測試 4: 狀態機轉換（含硬化阻斷）成功")
+
+        # 4.5 測試 Draft Debt Ledger
+        core.data["modules"]["demo_leaf"] = {
+            "type": "function", "state": "draft", "dependencies": [],
+            "input": {}, "output": {"x": "int"}, "fan_in_snapshot": 0
+        }
+        # 新增 2 個模組依賴 demo_leaf → fan-in 0 → 2
+        core.data["modules"]["consumer_a"] = {
+            "type": "function", "state": "planned", "dependencies": ["demo_leaf"],
+            "input": {}, "output": {}
+        }
+        core.data["modules"]["consumer_b"] = {
+            "type": "function", "state": "planned", "dependencies": ["demo_leaf"],
+            "input": {}, "output": {}
+        }
+        debt_result = core.check_draft_debt()
+        assert debt_result["checkpoint_required"] is True
+        assert core.get_node("demo_leaf")["state"] == "pending_review"
+        # 清理測試資料
+        for k in ["demo_leaf", "consumer_a", "consumer_b"]:
+            del core.data["modules"][k]
+        print("  - 測試 4.5: Draft Debt Ledger 偵測與自動升級成功")
 
         # 5. 測試 Invariant 檢查
         test_code_file = "test_calculate_tax.py"
